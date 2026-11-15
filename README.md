@@ -2,79 +2,159 @@
 
 **A personal safety companion for women on the move.**
 
-Built for **Vihaan X** by team **404 Name Not Found**.
+Built for **Vihaan X** by **404 Name Not Found**.
 
-Jugnu is a mobile-first web app for planning a walk, finding nearby help, and starting a safety session. It puts directions, trusted contacts, and SOS actions in one place. The dark interface was designed for phones and adapts to larger screens.
+Jugnu is a mobile-first web app for planning a walk, finding nearby help, and sharing an SOS with a trusted contact. The hackathon demo starts at DTU in Delhi. It combines live walking directions with advisory route comparisons, a microphone-based distress trigger, and a call to a configured contact.
 
-## What the current build does
+![Jugnu desktop home screen with route planning and safety tools](docs/screenshots/home-desktop.webp)
 
-| Feature | What you can do |
+## Try the demo
+
+1. Open **Routes** and choose **Samaypur Badli Metro**, **Rithala Metro**, or **Japanese Park**. Compare the walking options Google Maps returns. Switch between daytime and nighttime, or ask AI to explain the suggested route.
+2. Sign in, add a trusted contact, and set a four-digit SOS passcode. From a planned route, select **Start monitoring** to bring the map into an armed safety session.
+3. With the demo account and Voice configured, **Start SOS** or a detected scream immediately requests a call to the saved demo contact. Audible mode starts the buzzer. A scream also opens an eight-second countdown for review. The passcode can dismiss the alert or silence the alarm after the call request. The police call appears as a labeled simulation.
+4. Open **Community** to see the fictional DTU posts and submit a report. Use **Nearby help** to look up hospitals and police stations around a searched area or your current location.
+
+| Walking routes | Safety session setup | Community feed |
+| --- | --- | --- |
+| ![Phone layout showing DTU walking routes and advisory scores](docs/screenshots/route-planner.webp) | ![Phone layout showing safety session setup with alert and recording choices](docs/screenshots/safety-session.webp) | ![Phone layout showing the sample DTU community reports](docs/screenshots/community.webp) |
+
+| Nearby help | SOS demo |
 | --- | --- |
-| **Accounts and safety setup** | Sign up, edit your profile, manage trusted contacts, and create or change a four-digit SOS passcode. The database stores contact details and incident history by account. Passwords and passcodes are hashed. |
-| **Live walking routes** | Use Google Maps to find a destination, get walking directions, and request route advice from OmniRoute. The advice is informational. Street lighting and personal safety are unverified. |
-| **Nearby help and weather** | Find police stations and hospitals from Google Places using your location or a searched area. Open directions in Google Maps and see live Delhi weather on the home screen. |
-| **Safety sessions and SOS** | Arm the microphone while the page is open. Manual SOS opens immediately. A possible scream starts an eight-second countdown with an option to get help sooner. Choose an audible or silent alert and use your passcode to silence the alarm or mark yourself safe. |
-| **Location and evidence** | Attach and share your last known location. Opt in to a short camera recording during an alert and review, export, or delete it on the same device. A missing or obstructed camera view leaves SOS available. |
-| **Help and community** | Use spoken or typed queries for routes and nearby help. Post a safety issue to the community feed. The feed contains user-submitted reports. |
-| **Trusted-contact SMS** | From a signed-in active SOS, confirm recipient consent and submit an SMS through Twilio when configured. Jugnu shows provider acceptance separately from confirmed delivery. |
+| ![Nearby hospitals and police stations on the desktop map](docs/screenshots/nearby-help.webp) | <img src="docs/screenshots/sos-demo.webp" width="340" alt="Phone layout showing the buzzer, a sample ringing status, and the simulated police call"> |
 
-## How the safety flow works
+The SOS screenshot uses a simulated provider status. The live Twilio trial call was separately verified by the recipient. Community demo posts use fictional profiles and are labeled as examples.
 
-```text
-Manual SOS ──────────────────────────────────────────────► Active SOS
-Foreground microphone → YAMNet → Possible scream → 8 s ─► Active SOS
-                                                            │
-                         ┌──────────────────────────────────┼─────────────────────┐
-                         ▼                                  ▼                     ▼
-                  Dialer and contacts                Incident record       Optional local clip
-                                                           │                       │
-                                                           └──── optional frame ───┘
-                                                                     ▼
-                                                          Maritime → Prune → AI advice
+## System architecture
+
+![Jugnu system architecture showing browser detection, Flask services and immediate Twilio calling](docs/jugnu-system-architecture.png)
+
+```mermaid
+flowchart LR
+    subgraph Device["Browser on phone or desktop"]
+        UI["Next.js and React UI"]
+        Audio["Microphone → AudioWorklet → YAMNet"]
+        Clip["MediaRecorder → IndexedDB"]
+        Audio --> UI
+        UI --> Clip
+    end
+    UI -->|"Account, safety, and incident API"| Proxy["Next.js same-origin API proxy"]
+    Proxy --> Flask["Flask"]
+    Flask --> DB[("SQLite · accounts, contacts, incidents")]
+    UI --> Maps["Google Maps · walking routes"]
+    UI --> Weather["Next.js weather endpoint"]
+    Weather --> Forecast["Open-Meteo or OpenWeather"]
+    Flask --> Places["Google Places · nearby services"]
+    Flask --> Router["OmniRoute or Gemini · text advice and voice intent"]
+    Flask --> Voice["Twilio Voice · demo contact"]
+    Flask --> Agent["Maritime · scene assessment agent"]
+    Agent --> Prune["Prune · model gateway"]
+    Prune --> Vision["Configured vision model"]
 ```
 
-Microphone classification runs in the browser with MediaPipe and YAMNet. Audio stays on the device during monitoring. Competing laughter, music, and cheering scores help filter weak detections. The model classifies scream-like sounds without identifying the speaker's gender. In a small speaker-held-out Deeply SLR99 benchmark, it triggered on **9 of 10 female-labeled screams**, **2 of 3 male-labeled screams**, and **1 of 5 laughter clips**. These results describe the test clips. The web app needs microphone permission and an open, awake page to monitor sound.
+## SOS flow
 
-Jugnu's **Call 112** action opens the device dialer in India. Automatic calls to emergency services, unattended SMS, cloud evidence backup, and institutional evidence sharing are pending. [India's Emergency Response Support System](https://www.mha.gov.in/emergency-response-support-system-erss) · [Deeply SLR99 dataset](https://openslr.org/99/)
+```mermaid
+flowchart TD
+    Sound["Armed microphone recognizes a possible scream"] --> Countdown["Eight-second countdown"]
+    Countdown --> Check{"Passcode or timely benign demo assessment?"}
+    Check -->|"Yes"| Cancel["Close alert and stop buzzer"]
+    Check -->|"No, uncertain, or camera unavailable"| Active["Sync active SOS"]
+    Manual["Manual SOS or Get help now"] --> Active
+    Countdown --> Evidence["Opt-in recording saved on this device"]
+    Active --> Evidence
+    Sound --> Demo{"Signed in as configured demo account?"}
+    Manual --> Demo
+    Demo -->|"Yes"| Contact["Call saved contact through Twilio"]
+    Active --> Display{"Demo account?"}
+    Display -->|"Yes"| Police["Show simulated police call and draft"]
+    Display -->|"No"| Options["Show manual dialing and sharing options"]
+    Contact --> Status["Show queued, ringing, connected, or outcome"]
+```
+
+### Demo call sequence
+
+```mermaid
+sequenceDiagram
+    participant U as Jugnu client
+    participant F as Flask
+    participant T as Twilio Voice
+    participant P as Saved contact
+    U->>F: Sync manual SOS or detected scream
+    U->>F: Request call for incident
+    F->>F: Check account, saved number, and previous attempt
+    F->>T: Create call
+    T-->>F: Return call ID and status
+    T->>P: Ring the saved number
+    U->>F: Poll call status
+    F->>T: Fetch call status
+    F-->>U: Return provider status
+```
+
+The local browser plays the alarm and displays the police simulation. The server uses the saved demo destination and records one call request per incident. Trial mode uses Twilio’s hosted voice template. A standard account can play Jugnu’s own spoken message. [Twilio Voice trial settings](https://www.twilio.com/docs/usage/trials/try-out-voice) · [Twilio voice rules for India](https://www.twilio.com/en-us/guidelines/in/voice)
+
+## Route comparison
+
+```mermaid
+flowchart LR
+    Start["Choose origin and destination"] --> Maps["Google Maps walking routes"]
+    Maps --> Factors["Compare walking time, detour distance, and mapped obstacles"]
+    Conditions["Day or night and available weather"] --> Factors
+    Factors --> Score["Advisory score per option"]
+    Score --> Color["Red below 50 · yellow 50–70 · green above 70"]
+    Score --> Explain["Optional AI explanation"]
+    Color --> Pick["Carry chosen route into the safety session"]
+```
+
+The score compares known route features. Street lighting, pedestrian activity, and personal safety remain unverified.
 
 ## Maritime and Prune
 
-Maritime runs a private Python agent for optional incident assessments. The user can choose to share one camera frame, or request advice based on the incident trigger. The agent sends the request through Prune to a configured model and returns an advisory summary. A missing frame, blocked request, or provider outage leaves the SOS flow independent.
+Maritime hosts the private Python scene assessment agent. With camera consent, Jugnu can share a frame for an incident summary. In the demo, two frames can help assess a pending alert. The agent sends the request through Prune, which manages the vision provider key and can return a request receipt. Dark, missing, or inconclusive footage keeps the countdown active.
 
-The Flask-to-agent-to-Prune request path was tested with mocked upstream services. A live assessment requires a deployed Maritime agent, a Maritime API key, a Prune app key, and a vision-capable provider configured in Prune. The live OmniRoute text path has been verified separately for route advice and voice commands. [Maritime custom agents](https://maritime.sh/docs/frameworks/custom) · [Prune gateway setup](https://www.withprune.com/docs)
+Live scene assessment requires a deployed Maritime agent, a Prune app key, and a vision provider configured in Prune. The scene assessment path was verified with mocked services. [Maritime custom agents](https://maritime.sh/docs/frameworks/custom) · [Prune integration](https://www.withprune.com/docs)
 
 ## Tech stack
 
-**Web** · Next.js, React, TypeScript, Tailwind CSS, Web Audio, MediaRecorder, IndexedDB
+![Jugnu technology stack across the browser, backend, maps, voice and AI](docs/jugnu-tech-stack-pipeline.png)
 
-**Backend** · Python, Flask, SQLAlchemy, SQLite
+| Layer | Technologies |
+| --- | --- |
+| Web app | Next.js 15, React 19, TypeScript, Tailwind CSS |
+| Maps and context | Google Maps Routes and Places, Open-Meteo or OpenWeather |
+| On-device audio | Web Audio API, AudioWorklet, MediaPipe Audio Tasks, YAMNet |
+| Evidence | MediaRecorder, IndexedDB |
+| Backend and auth | Python 3.12, Flask, SQLAlchemy, SQLite, hashed passwords and SOS passcodes |
+| Text AI | OmniRoute with Groq GPT-OSS 20B and 120B fallback, or Gemini |
+| Scene assessment | Maritime agent, Prune gateway, configurable vision model |
+| Notifications | Twilio Voice for the demo contact, optional Twilio SMS |
 
-**Services** · Google Maps Routes and Places, Open-Meteo or OpenWeather, OmniRoute, Maritime, Prune, optional Twilio SMS
+## Run locally
 
-## Run the app from the source checkout
+Use Node.js 20 or later and Python 3.12. Copy [backend/.env.example](backend/.env.example) to `backend/.env` and [frontend/.env.example](frontend/.env.example) to `frontend/.env.local`.
 
-This repository contains the project README. The commands below use a Jugnu source checkout with both `frontend/` and `backend/` directories. Use Node.js 20 or later and Python 3.12.
+```bash
+cd backend
+python -m venv venv
+source venv/bin/activate
+python -m pip install -r requirements.txt
+python -m flask --app run run --host 127.0.0.1 --port 8000
+```
 
-1. Copy `backend/.env.example` to `backend/.env` and `frontend/.env.example` to `frontend/.env.local`. Keep real credentials in those local files.
-2. Set `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` for Maps JavaScript, Routes, Places and Geocoding, and `GOOGLE_MAPS_SERVER_API_KEY` for server-side Nearby Search. Set the OmniRoute base URL, API key and model in the backend for text AI.
-3. Start the backend on port 8000.
+On Windows PowerShell, activate the virtual environment with `.\venv\Scripts\Activate.ps1`.
 
-   ```bash
-   cd backend
-   python -m venv venv
-   source venv/bin/activate          # PowerShell uses .\venv\Scripts\Activate.ps1
-   python -m pip install -r requirements.txt
-   python -m flask --app run run --host 127.0.0.1 --port 8000
-   ```
+```bash
+cd frontend
+npm ci --legacy-peer-deps
+npm run dev
+```
 
-4. In a second terminal, start the frontend and open [localhost:3000](http://localhost:3000).
+Open [localhost:3000](http://localhost:3000). Enable camera, microphone, and location from localhost or HTTPS. Follow the [live setup guide](docs/jugnu-live-setup.md) for Maps, OmniRoute or Gemini, Twilio, Maritime, and Prune. Use your own demo account and approved recipient. Keep credentials in local environment files.
 
-   ```bash
-   cd frontend
-   npm ci --legacy-peer-deps
-   npm run dev
-   ```
+## Demo limits
 
-5. Create an account at `/login`, choose a passcode, and add a trusted contact. Try **Routes → Start monitoring** to open a safety session. Use the incident screen to inspect the record without placing an emergency call.
+- The browser needs an awake, open page for microphone monitoring. YAMNet detects possible screams without identifying the speaker’s gender. In a small speaker-held-out benchmark, it triggered on 9 of 10 female-labeled scream clips and 2 of 3 male-labeled scream clips. [Deeply SLR99 dataset](https://openslr.org/99/)
+- Videos stay in the device’s browser storage. Saved incident metadata is synced to the account database.
+- Police dispatch is simulated during the hackathon demo. Public hosting, cloud evidence backup, and institutional evidence sharing are pending.
 
-Camera, microphone and location permissions require localhost or HTTPS. Sponsor assessment and provider SMS need their own credentials. Public hosting is pending.
+Jugnu builds on [Go Guardian by Nidhi Pai](https://github.com/Nidhi-Pai/go-guardian).
